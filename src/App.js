@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import React, { Suspense, useEffect, useState, useMemo } from 'react'
 import { Canvas, useFrame } from '@react-three/fiber'
 import { useGLTF, useTexture, Loader, Environment, useFBX, useAnimations, OrthographicCamera } from '@react-three/drei';
 import { MeshStandardMaterial } from 'three/src/materials/MeshStandardMaterial';
@@ -6,7 +6,6 @@ import { MeshStandardMaterial } from 'three/src/materials/MeshStandardMaterial';
 import { LinearEncoding, sRGBEncoding } from 'three/src/constants';
 import { LineBasicMaterial, MeshPhysicalMaterial, Vector2 } from 'three';
 
-import { OrbitControls } from '@react-three/drei';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 
@@ -14,6 +13,9 @@ import createAnimation from './converter';
 import blinkData from './blendDataBlink.json';
 
 import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition';
+
+// Import RAG service for Michael's knowledge
+import ragService from './rag/rag-service.js';
 
 // Access your API key (see "Set up your API key" above)
 import './App.css'
@@ -28,11 +30,11 @@ const OLLAMA_HOST = 'http://localhost:11434';
 const textToSpeech = (text, onStart, onEnd, onBoundary = null) => {
   if (!window.speechSynthesis) {
     console.error('Speech synthesis not supported');
-    onEnd();
+    if (onEnd) onEnd();
     return;
   }
 
-  // Cancel any ongoing speech
+  // Cancel any ongoing speech to prevent overlap
   window.speechSynthesis.cancel();
 
   const utterance = new SpeechSynthesisUtterance(text);
@@ -106,14 +108,12 @@ const textToSpeech = (text, onStart, onEnd, onBoundary = null) => {
     if (onEnd) onEnd();
   };
   
-  // Add boundary event for word-level synchronization
-  utterance.onboundary = (event) => {
-    if (onBoundary && event.name === 'word') {
-      onBoundary(event);
-    }
-  };
-  
-  utterance.onerror = (event) => {
+      // Add boundary event for word-level synchronization
+      utterance.onboundary = (event) => {
+        if (onBoundary && event.name === 'word') {
+          onBoundary(event);
+        }
+      };  utterance.onerror = (event) => {
     console.error('Speech synthesis error:', event);
     if (onEnd) onEnd();
   };
@@ -129,30 +129,72 @@ const textToSpeech = (text, onStart, onEnd, onBoundary = null) => {
   }, 100);
 };
 
-// Ollama API function
+// Enhanced Ollama API function with RAG integration
 const getOllamaResponse = async (message) => {
   try {
+    // First, check if the query is about Michael using RAG
+    const ragResults = ragService.processQuery(message);
+    let contextualInfo = "";
+    let isAboutMichael = false;
+
+    // Determine if this is a question about Michael
+    const michaelKeywords = ['michael', 'you', 'your', 'skills', 'experience', 'projects', 'certifications', 'background', 'work', 'technologies', 'about yourself'];
+    isAboutMichael = michaelKeywords.some(keyword => message.toLowerCase().includes(keyword));
+
+    if (isAboutMichael && ragResults && ragResults.length > 0) {
+      // Use RAG results to provide context
+      contextualInfo = ragResults.slice(0, 3).map(r => r.content).join(' ');
+      
+      // For questions specifically about Michael, provide direct RAG response
+      if (message.toLowerCase().includes('who are you') || 
+          message.toLowerCase().includes('about yourself') ||
+          message.toLowerCase().includes('tell me about michael')) {
+        return ragService.generateContextualResponse(message, ragResults);
+      }
+    }
+
+    // Enhanced prompt with RAG context
+    let enhancedPrompt = `You are Joi, Michael McCullough's AI assistant. You represent Michael, a Senior AI Engineer & Software Architect.`;
+    
+    if (contextualInfo) {
+      enhancedPrompt += ` Here's relevant information about Michael: ${contextualInfo}`;
+    }
+    
+    enhancedPrompt += ` Keep responses conversational and under 50 words. User says: ${message}`;
+
     const response = await axios.post(`${OLLAMA_HOST}/api/generate`, {
-      model: "llama3.2", // You can change this to your preferred model
-      prompt: `You are Joi, a friendly 3D virtual assistant. Keep responses conversational and under 50 words. User says: ${message}`,
+      model: "llama3.2",
+      prompt: enhancedPrompt,
       stream: false
+    }, {
+      timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json'
+      }
     });
     
     return response.data.response;
   } catch (error) {
     console.error('Ollama error:', error);
-    throw new Error('Failed to get response from Ollama. Make sure Ollama is running locally.');
+    if (error.code === 'ECONNREFUSED') {
+      throw new Error('Cannot connect to Ollama. Make sure Ollama is running on localhost:11434');
+    } else if (error.code === 'ENOTFOUND') {
+      throw new Error('Ollama host not found. Check your network connection.');
+    } else if (error.response) {
+      throw new Error(`Ollama server error: ${error.response.status} - ${error.response.statusText}`);
+    } else {
+      throw new Error('Failed to get response from Ollama. Make sure Ollama is running locally.');
+    }
   }
 };
 
-function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, setPlaying }) {
+function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlayingAudio, setIsPlayingAudio }) {
 
   let gltf = useGLTF(avatar_url);
   let morphTargetDictionaryBody = null;
   let morphTargetDictionaryLowerTeeth = null;
 
   const [speechIntensity, setSpeechIntensity] = useState(0);
-  const [wordBoundaries, setWordBoundaries] = useState([]);
 
   const [
     bodyTexture,
@@ -317,12 +359,14 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
 
   const [clips, setClips] = useState([]);
 
-  const mixer = useMemo(() => new THREE.AnimationMixer(gltf.scene), []);
+  const mixer = useMemo(() => new THREE.AnimationMixer(gltf.scene), [gltf.scene]);
 
   useEffect(() => {
 
-    if (speak === false)
+    if (speak === false || isPlayingAudio === true)
       return;
+
+    setIsPlayingAudio(true); // Set flag to prevent double playback
 
     // Use browser text-to-speech instead of remote server
     textToSpeech(
@@ -330,20 +374,19 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
       () => {
         // On speech start
         setPlaying(true);
-        setAudioSource('browser-tts'); // Just a flag to indicate TTS is active
+        // Remove audioSource usage since it's not needed
         setSpeechIntensity(1);
       },
       () => {
         // On speech end
         setSpeak(false);
         setPlaying(false);
-        setAudioSource(null);
         setSpeechIntensity(0);
+        setIsPlayingAudio(false); // Clear flag when speech ends
       },
       (event) => {
         // On word boundary - increase mouth movement intensity
         setSpeechIntensity(Math.random() * 0.5 + 0.5); // Random intensity between 0.5 and 1
-        setWordBoundaries(prev => [...prev, { time: Date.now(), charIndex: event.charIndex }]);
       }
     );
 
@@ -358,7 +401,6 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
       const animationData = [];
       
       for (let i = 0; i <= frames; i++) {
-        const time = i / frameRate;
         const progress = i / frames;
         
         // More varied and dynamic mouth movements
@@ -421,7 +463,14 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
       setClips(newClips.filter(clip => clip !== null));
     }
 
-  }, [speak, text]);
+  }, [speak, text]); // Simplified dependencies - only react to speak and text changes
+
+  // Reset audio flag when speak is turned off externally
+  useEffect(() => {
+    if (speak === false) {
+      setIsPlayingAudio(false);
+    }
+  }, [speak]);
 
   let idleFbx = useFBX('/idle.fbx');
   let { clips: idleClips } = useAnimations(idleFbx.animations);
@@ -458,7 +507,7 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
     blinkAction.play();
 
 
-  }, []);
+  }, [idleClips, mixer, morphTargetDictionaryBody]);
 
   // Play animation clips when available
   useEffect(() => {
@@ -473,7 +522,7 @@ function Avatar({ avatar_url, speak, setSpeak, text, setAudioSource, playing, se
 
     });
 
-  }, [playing]);
+  }, [playing, clips, mixer]);
 
 
   useFrame((state, delta) => {
@@ -495,22 +544,68 @@ const STYLES = {
 
 function App() {
 
-  const [chats, setChats] = useState([{ msg: 'Hi there! I\'m Joi, your AI assistant. I\'m now powered by local Ollama and speak with a natural voice!', who: 'bot', exct: '0' }])
-  const [text, setText] = useState("Hello I am Joi, your 3D virtual assistant. I'm now powered by local Ollama and use browser text-to-speech!");
+  const [chats, setChats] = useState([{ msg: 'Hi! I\'m Joi, Michael McCullough\'s AI assistant. I can tell you about Michael\'s skills, projects, certifications, and experience in AI engineering. What would you like to know?', who: 'bot', exct: '0' }])
+  const [text, setText] = useState("Hello! I am Joi, Michael McCullough's AI assistant. I can share information about Michael's expertise in AI engineering, LLM fine-tuning, RAG systems, and more!");
   const [msg, setMsg] = useState("");
-  const [exct, setexct] = useState("");
   const [load, setLoad] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [visits, setVisits] = useState("--");
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false); // Move to main component
+
+  // Add RAG test function
+  const testRAG = () => {
+    const testQueries = [
+      "What are Michael's AI skills?",
+      "Tell me about Michael's projects",
+      "What certifications does Michael have?",
+      "How can I contact Michael?"
+    ];
+    
+    const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];
+    getResposnse(randomQuery);
+  };
+
+  // Add global error handlers
+  useEffect(() => {
+    const handleUnhandledRejection = (event) => {
+      console.error('Unhandled promise rejection:', event.reason);
+      // Don't show toast for connection errors from extensions
+      if (event.reason && event.reason.message && 
+          !event.reason.message.includes('Could not establish connection') &&
+          !event.reason.message.includes('Receiving end does not exist')) {
+        toast.error('An error occurred: ' + event.reason.message);
+      }
+    };
+
+    const handleError = (event) => {
+      console.error('Global error:', event.error);
+      if (event.error && event.error.message && 
+          !event.error.message.includes('Could not establish connection') &&
+          !event.error.message.includes('Receiving end does not exist')) {
+        toast.error('An error occurred: ' + event.error.message);
+      }
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    window.addEventListener('error', handleError);
+
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+      window.removeEventListener('error', handleError);
+    };
+  }, []);
+
   const getResposnse = async (msg) => {
     if (msg === '') {
       toast.error("Prompt can't be empty.[In some browsers mic may not work]");
       return;
     }
-    if (load === true || speak === true) {
+    if (load === true || speak === true || isProcessing === true) {
       toast.error("Already generating response!");
       return;
     }
+    
+    setIsProcessing(true); // Set processing flag
     setChats(chats => [...chats, { msg: msg, who: 'me' }])
 
     setMsg("");
@@ -526,13 +621,19 @@ function App() {
       
       setSpeak(true);
       setText(response);
-      setexct(timeTaken / 1000);
       setLoad(false);
+      
+      // Add bot response to chat immediately
+      setChats(chats => [...chats, { msg: response, who: 'bot', exct: timeTaken / 1000 }]);
       
     } catch (error) {
       console.error('Error getting response:', error);
       toast.error(error.message || "Failed to get response. Make sure Ollama is running.");
       setLoad(false);
+    } finally {
+      setIsProcessing(false); // Clear processing flag
+      // Also reset audio flag in case of errors
+      setIsPlayingAudio(false);
     }
   }
 
@@ -547,12 +648,18 @@ function App() {
     };
     try {
       const response = await fetch(url, options);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
       const result = await response.text();
-      console.log(result);
+      console.log('Visitor count result:', result);
 
-      setVisits(JSON.parse(result).message)
+      const parsedResult = JSON.parse(result);
+      setVisits(parsedResult.message || '--');
     } catch (error) {
-      console.error(error);
+      console.error('Failed to get visitor count:', error);
+      setVisits('--');
+      // Don't show toast error for visitor count as it's not critical
     }
   }
   useEffect(() => {
@@ -563,18 +670,11 @@ function App() {
   }, [chats])
 
   const [speak, setSpeak] = useState(false);
-  const [audioSource, setAudioSource] = useState(null);
   const [playing, setPlaying] = useState(false);
   
-  // Handle TTS completion
-  useEffect(() => {
-    if (playing && text && exct) {
-      // Add the bot response to chat when TTS starts
-      setChats(chats => [...chats, { msg: text, who: 'bot', exct: exct }]);
-    }
-  }, [playing, text, exct]);
   const [isListening, setIsListening] = useState(false);
   const [listeningTimeout, setListeningTimeout] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false); // Add processing flag
   
   const {
     transcript,
@@ -593,26 +693,32 @@ function App() {
       return;
     }
 
-    // Clear any existing transcript and input
-    resetTranscript();
-    setMsg("");
-    setIsListening(true);
-    
-    SpeechRecognition.startListening({
-      continuous: true,
-      language: 'en-US',
-      interimResults: true
-    });
-    
-    // Set timeout to automatically stop listening after 30 seconds
-    const timeout = setTimeout(() => {
-      if (isListening) {
-        stopListening();
-        toast.info("Listening timeout - please try again.");
-      }
-    }, 30000);
-    
-    setListeningTimeout(timeout);
+    try {
+      // Clear any existing transcript and input
+      resetTranscript();
+      setMsg("");
+      setIsListening(true);
+      
+      SpeechRecognition.startListening({
+        continuous: true,
+        language: 'en-US',
+        interimResults: true
+      });
+      
+      // Set timeout to automatically stop listening after 30 seconds
+      const timeout = setTimeout(() => {
+        if (isListening) {
+          stopListening();
+          toast.info("Listening timeout - please try again.");
+        }
+      }, 30000);
+      
+      setListeningTimeout(timeout);
+    } catch (error) {
+      console.error('Speech recognition error:', error);
+      toast.error("Failed to start voice recognition. Try refreshing the page.");
+      setIsListening(false);
+    }
   };
   
   const stopListening = () => {
@@ -686,12 +792,25 @@ function App() {
         <img src='./images/icons/menu.png' alt='menu'></img>
       </div>
       <div className='modal' style={{ display: showModal ? 'flex' : 'none' }}>
-        <h1>Promt 3D</h1>
-        <p style={{ marginTop: '10px' }}>A ThreeJS-powered virtual human that uses local Ollama and browser text-to-speech for natural conversation</p>
-        <a style={{ padding: '10px' }} className='repo' href='https://github.com/vaibhav1663/promt3d' target='_blank'>Github</a>
-        <p>Make sure Ollama is running locally on port 11434</p>
-        <p>Made with ❤️ by</p>
-        <a href='https://vaibhav1663.github.io/' target='_blank' style={{ marginBlock: "5px" }}>Vaibhav Khating</a>
+        <h1>Michael's AI Assistant</h1>
+        <p style={{ marginTop: '10px' }}>A RAG-powered AI assistant that knows about Michael McCullough's professional background, skills, and projects</p>
+        <p><strong>Ask me about:</strong></p>
+        <ul style={{ textAlign: 'left', marginTop: '5px' }}>
+          <li>Michael's AI/ML skills and experience</li>
+          <li>His projects and certifications</li>
+          <li>Technical expertise and background</li>
+          <li>Contact information</li>
+        </ul>
+        <button 
+          style={{ padding: '8px 16px', margin: '10px', backgroundColor: '#35a4f3', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+          onClick={testRAG}
+        >
+          Test RAG System
+        </button>
+        <a style={{ padding: '10px' }} className='repo' href='https://github.com/macrilege' target='_blank' rel="noreferrer">Michael's GitHub</a>
+        <p>Powered by Ollama + RAG knowledge base</p>
+        <p>Made with ❤️ for</p>
+        <a href='https://www.linkedin.com/in/mic-mcc/' target='_blank' rel="noreferrer" style={{ marginBlock: "5px" }}>Michael McCullough</a>
         <p>Visitor's count 👀 : <span style={{color: '#35a4f3'}}>{visits}</span></p>
       </div>
       <div className='chat-div'>
@@ -738,6 +857,7 @@ function App() {
               if (e.key === 'Enter') { 
                 if (isListening) {
                   stopListening();
+                  // Don't call getResposnse here as stopListening will handle it
                 } else {
                   getResposnse(msg);
                 } 
@@ -790,9 +910,10 @@ function App() {
             speak={speak}
             setSpeak={setSpeak}
             text={text}
-            setAudioSource={setAudioSource}
             playing={playing}
             setPlaying={setPlaying}
+            isPlayingAudio={isPlayingAudio}
+            setIsPlayingAudio={setIsPlayingAudio}
           />
         </Suspense>
       </Canvas>
