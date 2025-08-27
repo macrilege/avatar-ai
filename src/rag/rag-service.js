@@ -162,7 +162,7 @@ class MichaelRAGService {
         return `One of Michael's notable projects is ${topResult.metadata.title}. ${topResult.content}`;
       
       case 'certifications':
-        return `Regarding certifications, ${context}`;
+        return `Regarding Michael's certifications, ${context}`;
       
       case 'experience':
         return `About Michael's background: ${context}`;
@@ -171,7 +171,7 @@ class MichaelRAGService {
         return `${context}`;
       
       default:
-        return `Here's what I know: ${context}`;
+        return `Here's what I know about Michael: ${context}`;
     }
   }
 }

@@ -154,7 +154,7 @@ const getOllamaResponse = async (message) => {
     }
 
     // Enhanced prompt with RAG context
-    let enhancedPrompt = `You are Joi, Michael McCullough's AI assistant. You represent Michael, a Senior AI Engineer & Software Architect.`;
+    let enhancedPrompt = `You are Joi, Michael McCullough's AI assistant. You represent Michael, a Senior AI Engineer & Software Architect. Important: Always refer to him as "Michael" or "Michael McCullough" - never use "Mike" or any other nicknames.`;
     
     if (contextualInfo) {
       enhancedPrompt += ` Here's relevant information about Michael: ${contextualInfo}`;
@@ -530,8 +530,19 @@ function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlay
   });
 
   return (
-    <group name="avatar">
-      <primitive object={gltf.scene} dispose={null} />
+    <group 
+      name="avatar" 
+      position={[0, 0, 0]} 
+      scale={[1, 1, 1]} 
+      rotation={[0, 0, 0]}
+    >
+      <primitive 
+        object={gltf.scene} 
+        dispose={null} 
+        position={[0, 0, 0]}
+        scale={[1, 1, 1]}
+        rotation={[0, 0, 0]}
+      />
     </group>
   );
 }
@@ -822,15 +833,27 @@ function App() {
           <div className="chat-avatar-container">
             <Canvas 
               className="chat-canvas"
-              dpr={2} 
+              dpr={2}
+              camera={false}
+              resize={{ scroll: false, debounce: { scroll: 50, resize: 0 } }}
               onCreated={(ctx) => {
                 ctx.gl.physicallyCorrectLights = true;
+                // Disable zoom controls
+                ctx.gl.domElement.style.touchAction = 'none';
+                ctx.gl.domElement.addEventListener('wheel', (e) => e.preventDefault(), { passive: false });
               }}
             >
               <OrthographicCamera
                 makeDefault
                 zoom={800}
-                position={[0, 1.5, 1]}
+                position={[0, 1.4, 1]}
+                rotation={[0, 0, 0]}
+                near={0.1}
+                far={1000}
+                left={-2}
+                right={2}
+                top={2}
+                bottom={-2}
               />
 
               <Suspense fallback={null}>
