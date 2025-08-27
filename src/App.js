@@ -37,7 +37,10 @@ const textToSpeech = (text, onStart, onEnd, onBoundary = null) => {
   // Cancel any ongoing speech to prevent overlap
   window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
+  // Remove emotion markers from speech but keep the text for emotion detection
+  const cleanText = text.replace(/\*[^*]+\*/g, '').trim();
+  
+  const utterance = new SpeechSynthesisUtterance(cleanText);
   
   // Function to set voice after voices are loaded
   const setVoice = () => {
@@ -154,13 +157,17 @@ const getOllamaResponse = async (message) => {
     }
 
     // Enhanced prompt with RAG context
-    let enhancedPrompt = `You are Joi, Michael McCullough's AI assistant. You represent Michael, a Senior AI Engineer & Software Architect. Important: Always refer to him as "Michael" or "Michael McCullough" - never use "Mike" or any other nicknames.`;
+    let enhancedPrompt = `You are Joi, Michael McCullough's AI assistant. You represent Michael, a Senior AI Engineer & Software Architect. Important: Always refer to him as "Michael" or "Michael McCullough" - never use "Mike" or any other nicknames. 
+
+You have facial expressions and can show emotions through physical expressions. You can use emotion markers like *smile*, *thinking*, *surprised*, *confident*, *wave* etc. in your responses - these will trigger actual facial expressions and will NOT be spoken aloud.
+
+Be conversational and expressive. Use emotion markers when appropriate to enhance your responses with visual expressions.`;
     
     if (contextualInfo) {
       enhancedPrompt += ` Here's relevant information about Michael: ${contextualInfo}`;
     }
     
-    enhancedPrompt += ` Keep responses conversational and under 50 words. User says: ${message}`;
+    enhancedPrompt += ` Keep responses conversational and under 50 words, but be expressive and engaging. User says: ${message}`;
 
     const response = await axios.post(`${OLLAMA_HOST}/api/generate`, {
       model: "llama3.2",
@@ -188,14 +195,263 @@ const getOllamaResponse = async (message) => {
   }
 };
 
-function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlayingAudio, setIsPlayingAudio }) {
+function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlayingAudio, setIsPlayingAudio, load }) {
 
   let gltf = useGLTF(avatar_url);
   let morphTargetDictionaryBody = null;
   let morphTargetDictionaryLowerTeeth = null;
 
-  const [speechIntensity, setSpeechIntensity] = useState(0);
+  // Emotion detection and expression system
+  const [currentEmotion, setCurrentEmotion] = useState('neutral');
+  const [isExpressing, setIsExpressing] = useState(false);
 
+  // Find the main face mesh for expressions
+  let faceMesh = null;
+  if (gltf.scene) {
+    gltf.scene.traverse((child) => {
+      if (child.isMesh && child.morphTargetDictionary) {
+        faceMesh = child;
+      }
+    });
+  }
+
+  // Enhanced emotion detection function
+  const detectEmotion = (responseText) => {
+    if (!responseText) return 'neutral';
+    
+    const text = responseText.toLowerCase();
+    
+    // First check for explicit emotion markers
+    if (text.match(/\*(.*smile.*|.*happy.*|.*joy.*|.*pleased.*|.*grin.*)\*/)) {
+      return 'happy';
+    }
+    if (text.match(/\*(.*think.*|.*ponder.*|.*consider.*|.*concentrate.*)\*/)) {
+      return 'thinking';
+    }
+    if (text.match(/\*(.*surprise.*|.*wow.*|.*amaze.*|.*shock.*)\*/)) {
+      return 'surprised';
+    }
+    if (text.match(/\*(.*concern.*|.*worry.*|.*serious.*|.*frown.*)\*/)) {
+      return 'concerned';
+    }
+    if (text.match(/\*(.*confident.*|.*proud.*|.*smirk.*)\*/)) {
+      return 'confident';
+    }
+    if (text.match(/\*(.*welcome.*|.*warm.*|.*friendly.*|.*greet.*)\*/)) {
+      return 'friendly';
+    }
+    if (text.match(/\*(.*wave.*|.*hello.*|.*hi.*|.*goodbye.*|.*bye.*)\*/)) {
+      return 'wave';
+    }
+    
+    // Then check for contextual emotions in regular text
+    if (text.match(/(great|excellent|wonderful|amazing|fantastic|love|excited|happy|glad|pleased|perfect|awesome|brilliant)/)) {
+      return 'happy';
+    }
+    
+    // Thinking/Concentrated
+    if (text.match(/(think|consider|analyze|complex|technical|algorithm|data|programming|engineering|let me|hmm|well)/)) {
+      return 'thinking';
+    }
+    
+    // Surprised/Interested
+    if (text.match(/(wow|interesting|fascinating|surprised|really|incredible|impressive|amazing)/)) {
+      return 'surprised';
+    }
+    
+    // Concerned/Serious
+    if (text.match(/(concern|issue|problem|difficult|challenge|unfortunately|however|careful|important)/)) {
+      return 'concerned';
+    }
+    
+    // Confident/Professional
+    if (text.match(/(expertise|experience|skilled|professional|accomplished|successful|leader|expert)/)) {
+      return 'confident';
+    }
+    
+    // Friendly/Welcoming
+    if (text.match(/(hello|hi|welcome|nice|meet|help|assist|pleasure)/)) {
+      return 'friendly';
+    }
+    
+    return 'neutral';
+  };
+
+  // Expression mappings for each emotion
+  const emotionExpressions = {
+    happy: [
+      { morph: 'mouthSmile_L', intensity: 0.6 },
+      { morph: 'mouthSmile_R', intensity: 0.6 },
+      { morph: 'cheekSquint_L', intensity: 0.3 },
+      { morph: 'cheekSquint_R', intensity: 0.3 }
+    ],
+    thinking: [
+      { morph: 'browDown_L', intensity: 0.4 },
+      { morph: 'browDown_R', intensity: 0.4 },
+      { morph: 'mouthPucker', intensity: 0.3 }
+    ],
+    surprised: [
+      { morph: 'eyeWide_L', intensity: 0.7 },
+      { morph: 'eyeWide_R', intensity: 0.7 },
+      { morph: 'browInnerUp', intensity: 0.5 },
+      { morph: 'jawOpen', intensity: 0.2 }
+    ],
+    concerned: [
+      { morph: 'browDown_L', intensity: 0.5 },
+      { morph: 'browDown_R', intensity: 0.5 },
+      { morph: 'mouthFrown_L', intensity: 0.3 },
+      { morph: 'mouthFrown_R', intensity: 0.3 }
+    ],
+    confident: [
+      { morph: 'mouthSmile_L', intensity: 0.4 },
+      { morph: 'mouthSmile_R', intensity: 0.4 },
+      { morph: 'browOuterUp_L', intensity: 0.3 },
+      { morph: 'browOuterUp_R', intensity: 0.3 }
+    ],
+    friendly: [
+      { morph: 'mouthSmile_L', intensity: 0.5 },
+      { morph: 'mouthSmile_R', intensity: 0.5 },
+      { morph: 'eyeSquint_L', intensity: 0.2 },
+      { morph: 'eyeSquint_R', intensity: 0.2 }
+    ],
+    wave: [
+      { morph: 'mouthSmile_L', intensity: 0.6 },
+      { morph: 'mouthSmile_R', intensity: 0.6 },
+      { morph: 'eyeSquint_L', intensity: 0.3 },
+      { morph: 'eyeSquint_R', intensity: 0.3 },
+      { morph: 'browInnerUp', intensity: 0.2 }
+    ],
+    neutral: []
+  };
+
+  // Function to apply emotion expression
+  const applyEmotion = (emotion, duration = 3000) => {
+    if (!faceMesh || !faceMesh.morphTargetDictionary || isExpressing) return;
+    
+    setIsExpressing(true);
+    console.log(`🎭 Applying emotion: ${emotion}`);
+    
+    const expressions = emotionExpressions[emotion] || [];
+    const morphs = faceMesh.morphTargetDictionary;
+    const influences = faceMesh.morphTargetInfluences;
+    
+    // Apply expressions
+    expressions.forEach(({ morph, intensity }) => {
+      if (morphs[morph] !== undefined) {
+        influences[morphs[morph]] = intensity;
+      }
+    });
+    
+    // Hold expression, then fade out
+    setTimeout(() => {
+      expressions.forEach(({ morph }) => {
+        if (morphs[morph] !== undefined) {
+          // Gradual fade out
+          const fadeOut = setInterval(() => {
+            const currentValue = influences[morphs[morph]];
+            if (currentValue > 0.05) {
+              influences[morphs[morph]] = currentValue * 0.8;
+            } else {
+              influences[morphs[morph]] = 0;
+              clearInterval(fadeOut);
+            }
+          }, 100);
+        }
+      });
+      
+      setTimeout(() => {
+        setIsExpressing(false);
+      }, 1000);
+    }, duration);
+  };
+
+  // React to text changes (AI responses)
+  useEffect(() => {
+    if (text && text.length > 10) { // Only for substantial responses
+      const detectedEmotion = detectEmotion(text);
+      if (detectedEmotion !== currentEmotion) {
+        setCurrentEmotion(detectedEmotion);
+        applyEmotion(detectedEmotion);
+      }
+    }
+  }, [text, currentEmotion, faceMesh, isExpressing]);
+
+  // Debug: Log model capabilities
+  useEffect(() => {
+    if (gltf) {
+      console.log('=== GLB MODEL DETAILED ANALYSIS ===');
+      console.log('Full GLTF object:', gltf);
+      
+      // Check animations
+      if (gltf.animations && gltf.animations.length > 0) {
+        console.log('🎬 ANIMATIONS FOUND:', gltf.animations.length);
+        gltf.animations.forEach((animation, index) => {
+          console.log(`  Animation ${index}: "${animation.name}" - Duration: ${animation.duration}s`);
+          console.log('    Tracks:', animation.tracks.map(track => ({
+            name: track.name,
+            type: track.constructor.name,
+            times: track.times.length + ' keyframes'
+          })));
+        });
+      } else {
+        console.log('❌ No animations found');
+      }
+      
+      // Detailed morph target analysis
+      console.log('🔍 SCANNING ALL MESHES FOR MORPH TARGETS...');
+      let totalMorphTargets = 0;
+      
+      gltf.scene.traverse((child) => {
+        console.log(`Checking: ${child.name} (${child.type})`);
+        
+        if (child.isMesh) {
+          console.log(`  � MESH: ${child.name}`);
+          console.log(`    - Geometry: ${child.geometry ? 'YES' : 'NO'}`);
+          console.log(`    - Material: ${child.material ? child.material.name || 'unnamed' : 'NO'}`);
+          
+          if (child.morphTargetDictionary) {
+            const morphs = Object.keys(child.morphTargetDictionary);
+            console.log(`    - 😊 MORPH TARGETS (${morphs.length}):`, morphs);
+            totalMorphTargets += morphs.length;
+            
+            // Store for later use
+            if (child.name.toLowerCase().includes('body') || child.name.toLowerCase().includes('head') || child.name.toLowerCase().includes('face')) {
+              morphTargetDictionaryBody = child.morphTargetDictionary;
+              console.log(`    - ✅ SET AS BODY MORPH DICTIONARY`);
+            }
+            if (child.name.toLowerCase().includes('teeth')) {
+              morphTargetDictionaryLowerTeeth = child.morphTargetDictionary;
+              console.log(`    - ✅ SET AS TEETH MORPH DICTIONARY`);
+            }
+          } else {
+            console.log(`    - ❌ No morph targets`);
+          }
+        }
+        
+        if (child.isBone) {
+          console.log(`  🦴 BONE: ${child.name}`);
+        }
+        
+        if (child.isLight) {
+          console.log(`  💡 LIGHT: ${child.name}`);
+        }
+        
+        if (child.isCamera) {
+          console.log(`  📷 CAMERA: ${child.name}`);
+        }
+      });
+      
+      console.log(`📊 SUMMARY:`);
+      console.log(`  - Total morph targets found: ${totalMorphTargets}`);
+      console.log(`  - Body morph dictionary set: ${morphTargetDictionaryBody ? 'YES' : 'NO'}`);
+      console.log(`  - Teeth morph dictionary set: ${morphTargetDictionaryLowerTeeth ? 'YES' : 'NO'}`);
+      
+      console.log('=== END DETAILED ANALYSIS ===');
+    }
+  }, [gltf]);
+
+  const [speechIntensity, setSpeechIntensity] = useState(0);
+  
   const [
     bodyTexture,
     eyesTexture,
@@ -509,6 +765,316 @@ function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlay
 
   }, [idleClips, mixer, morphTargetDictionaryBody]);
 
+  // Enhanced idle behaviors with more expressions
+  useEffect(() => {
+    if (!faceMesh || !faceMesh.morphTargetDictionary) return;
+    
+    const morphs = faceMesh.morphTargetDictionary;
+    const influences = faceMesh.morphTargetInfluences;
+    let idleTimer;
+    let blinkTimer;
+    
+    // Natural blinking
+    const blink = () => {
+      if (morphs['eyeBlink_L'] !== undefined && morphs['eyeBlink_R'] !== undefined) {
+        influences[morphs['eyeBlink_L']] = 1;
+        influences[morphs['eyeBlink_R']] = 1;
+        setTimeout(() => {
+          influences[morphs['eyeBlink_L']] = 0;
+          influences[morphs['eyeBlink_R']] = 0;
+        }, 150);
+      }
+      blinkTimer = setTimeout(blink, 2000 + Math.random() * 4000);
+    };
+    
+    // Random idle expressions
+    const idleExpression = () => {
+      if (speak || load) {
+        idleTimer = setTimeout(idleExpression, 3000);
+        return;
+      }
+      
+      // Random subtle expressions
+      const expressions = [
+        ['mouthSmile_L', 'mouthSmile_R'], // smile
+        ['browInnerUp'], // surprised
+        ['mouthPucker'], // thinking
+        ['cheekSquint_L', 'cheekSquint_R'] // squint
+      ];
+      
+      const randomExpression = expressions[Math.floor(Math.random() * expressions.length)];
+      
+      randomExpression.forEach(morphName => {
+        if (morphs[morphName] !== undefined) {
+          influences[morphs[morphName]] = 0.2 + Math.random() * 0.2;
+        }
+      });
+      
+      setTimeout(() => {
+        randomExpression.forEach(morphName => {
+          if (morphs[morphName] !== undefined) {
+            influences[morphs[morphName]] = 0;
+          }
+        });
+      }, 1500);
+      
+      idleTimer = setTimeout(idleExpression, 8000 + Math.random() * 12000);
+    };
+    
+    blink();
+    idleExpression();
+    
+    return () => {
+      if (blinkTimer) clearTimeout(blinkTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+    };
+  }, [faceMesh, speak, load]);
+
+  // Add dynamic behaviors and life to the avatar
+  useEffect(() => {
+    if (!gltf.scene) return;
+
+    let animationId;
+    let blinkTimer;
+    let gestureTimer;
+    let expressionTimer;
+
+    // Find the head/face mesh for expressions
+    let faceMesh = null;
+    gltf.scene.traverse((child) => {
+      if (child.isMesh && child.morphTargetDictionary) {
+        faceMesh = child;
+      }
+    });
+
+    // Random blinking
+    const randomBlink = () => {
+      if (faceMesh && faceMesh.morphTargetDictionary) {
+        const blinkMorphs = Object.keys(faceMesh.morphTargetDictionary).filter(key => 
+          key.toLowerCase().includes('blink') || key.toLowerCase().includes('eye')
+        );
+        
+        if (blinkMorphs.length > 0) {
+          blinkMorphs.forEach(morphName => {
+            const index = faceMesh.morphTargetDictionary[morphName];
+            if (faceMesh.morphTargetInfluences) {
+              // Quick blink animation
+              faceMesh.morphTargetInfluences[index] = 1;
+              setTimeout(() => {
+                faceMesh.morphTargetInfluences[index] = 0;
+              }, 150);
+            }
+          });
+        }
+      }
+      
+      // Schedule next blink randomly between 2-8 seconds
+      blinkTimer = setTimeout(randomBlink, 2000 + Math.random() * 6000);
+    };
+
+    // Random subtle expressions
+    const randomExpression = () => {
+      if (faceMesh && faceMesh.morphTargetDictionary && !speak) {
+        const expressionMorphs = Object.keys(faceMesh.morphTargetDictionary).filter(key => 
+          key.toLowerCase().includes('smile') || 
+          key.toLowerCase().includes('frown') ||
+          key.toLowerCase().includes('brow') ||
+          key.toLowerCase().includes('surprise')
+        );
+        
+        if (expressionMorphs.length > 0) {
+          const randomMorph = expressionMorphs[Math.floor(Math.random() * expressionMorphs.length)];
+          const index = faceMesh.morphTargetDictionary[randomMorph];
+          
+          if (faceMesh.morphTargetInfluences) {
+            // Subtle expression
+            faceMesh.morphTargetInfluences[index] = 0.2 + Math.random() * 0.3;
+            setTimeout(() => {
+              faceMesh.morphTargetInfluences[index] = 0;
+            }, 1500 + Math.random() * 2000);
+          }
+        }
+      }
+      
+      // Schedule next expression randomly between 10-20 seconds
+      expressionTimer = setTimeout(randomExpression, 10000 + Math.random() * 10000);
+    };
+
+    // Subtle head movements and breathing
+    const breathingAnimation = () => {
+      let time = 0;
+      
+      const animate = () => {
+        time += 0.008; // Slower breathing
+        
+        // Find the main body/torso for breathing
+        gltf.scene.traverse((child) => {
+          // Very subtle chest movement
+          if (child.name.toLowerCase().includes('spine') || 
+              child.name.toLowerCase().includes('chest') || 
+              child.name.toLowerCase().includes('torso')) {
+            // Much more subtle breathing - barely noticeable
+            const breathScale = 1 + Math.sin(time * 2) * 0.002;
+            child.scale.y = breathScale;
+          }
+          
+          // Minimal head movement
+          if (child.name.toLowerCase().includes('head')) {
+            // Very, very subtle head movement
+            child.rotation.y = Math.sin(time * 0.3) * 0.005;
+            child.rotation.x = Math.sin(time * 0.2) * 0.003;
+          }
+        });
+        
+        animationId = requestAnimationFrame(animate);
+      };
+      
+      animate();
+    };
+
+    // Random subtle gestures
+    const randomGesture = () => {
+      gltf.scene.traverse((child) => {
+        if (child.name.toLowerCase().includes('shoulder') || child.name.toLowerCase().includes('arm')) {
+          // Subtle shoulder movement
+          const originalY = child.rotation.y;
+          child.rotation.y += (Math.random() - 0.5) * 0.1;
+          
+          setTimeout(() => {
+            child.rotation.y = originalY;
+          }, 2000);
+        }
+      });
+      
+      // Schedule next gesture randomly between 15-30 seconds
+      gestureTimer = setTimeout(randomGesture, 15000 + Math.random() * 15000);
+    };
+
+    // Start all animations
+    randomBlink();
+    randomExpression();
+    breathingAnimation();
+    randomGesture();
+
+    // Cleanup function
+    return () => {
+      if (animationId) cancelAnimationFrame(animationId);
+      if (blinkTimer) clearTimeout(blinkTimer);
+      if (gestureTimer) clearTimeout(gestureTimer);
+      if (expressionTimer) clearTimeout(expressionTimer);
+    };
+  }, [gltf.scene, speak]);
+
+  // Smooth lip sync animation with natural speech patterns
+  useEffect(() => {
+    let speakingAnimationId;
+    let audioContext;
+    let analyser;
+    let dataArray;
+    
+    if (speak && faceMesh && faceMesh.morphTargetDictionary) {
+      // Get mouth-related morph targets
+      const mouthMorphs = {
+        open: faceMesh.morphTargetDictionary['mouthOpen'] || faceMesh.morphTargetDictionary['jawOpen'],
+        smile: faceMesh.morphTargetDictionary['mouthSmile_L'] || faceMesh.morphTargetDictionary['mouthSmile_R'],
+        pucker: faceMesh.morphTargetDictionary['mouthPucker'] || faceMesh.morphTargetDictionary['lipsPucker'],
+        wide: faceMesh.morphTargetDictionary['mouthStretch_L'] || faceMesh.morphTargetDictionary['mouthStretch_R'],
+        close: faceMesh.morphTargetDictionary['mouthClose'] || faceMesh.morphTargetDictionary['lipsClose']
+      };
+
+      // Create smooth animation with natural speech patterns
+      let time = 0;
+      let lastVolume = 0;
+      
+      const animateLipSync = () => {
+        time += 0.016; // 60fps
+        
+        // Create natural speech rhythm with multiple frequencies
+        const baseFreq = Math.sin(time * 8) * 0.5 + 0.5; // Main speech frequency
+        const midFreq = Math.sin(time * 12) * 0.3 + 0.3; // Consonant variations
+        const highFreq = Math.sin(time * 16) * 0.2; // Fine details
+        
+        // Smooth volume changes
+        const targetVolume = (baseFreq + midFreq) * 0.7;
+        lastVolume = lastVolume * 0.85 + targetVolume * 0.15; // Smooth interpolation
+        
+        // Apply natural mouth movements based on speech patterns
+        if (faceMesh.morphTargetInfluences) {
+          // Main mouth opening based on volume
+          if (mouthMorphs.open !== undefined) {
+            faceMesh.morphTargetInfluences[mouthMorphs.open] = Math.max(0, lastVolume * 0.6);
+          }
+          
+          // Subtle variations for realism
+          if (mouthMorphs.wide !== undefined) {
+            faceMesh.morphTargetInfluences[mouthMorphs.wide] = Math.max(0, (midFreq + highFreq) * 0.3);
+          }
+          
+          // Lip compression for consonants
+          if (mouthMorphs.pucker !== undefined) {
+            faceMesh.morphTargetInfluences[mouthMorphs.pucker] = Math.max(0, Math.sin(time * 10) * 0.2 + 0.1);
+          }
+          
+          // Subtle smile variations for natural expression
+          if (mouthMorphs.smile !== undefined) {
+            faceMesh.morphTargetInfluences[mouthMorphs.smile] = Math.max(0, Math.sin(time * 3) * 0.1 + 0.05);
+          }
+        }
+        
+        speakingAnimationId = requestAnimationFrame(animateLipSync);
+      };
+      
+      animateLipSync();
+    }
+    
+    return () => {
+      if (speakingAnimationId) {
+        cancelAnimationFrame(speakingAnimationId);
+      }
+      if (audioContext) {
+        audioContext.close();
+      }
+    };
+  }, [speak, faceMesh]);
+
+  // Thinking animation when AI is processing
+  useEffect(() => {
+    let thinkingInterval;
+    
+    if (load && faceMesh && faceMesh.morphTargetDictionary) {
+      // Look for thinking/concentration expressions
+      const thinkingMorphs = Object.keys(faceMesh.morphTargetDictionary).filter(key => 
+        key.toLowerCase().includes('brow') || 
+        key.toLowerCase().includes('frown') ||
+        key.toLowerCase().includes('concentrate')
+      );
+      
+      // Animate thinking expression
+      thinkingInterval = setInterval(() => {
+        thinkingMorphs.forEach(morphName => {
+          const index = faceMesh.morphTargetDictionary[morphName];
+          if (faceMesh.morphTargetInfluences) {
+            faceMesh.morphTargetInfluences[index] = 0.3 + Math.sin(Date.now() * 0.005) * 0.2;
+          }
+        });
+      }, 50);
+    } else if (faceMesh && faceMesh.morphTargetDictionary) {
+      // Reset thinking expressions when not loading
+      Object.keys(faceMesh.morphTargetDictionary).forEach(morphName => {
+        if (morphName.toLowerCase().includes('brow') || morphName.toLowerCase().includes('frown')) {
+          const index = faceMesh.morphTargetDictionary[morphName];
+          if (faceMesh.morphTargetInfluences) {
+            faceMesh.morphTargetInfluences[index] = 0;
+          }
+        }
+      });
+    }
+    
+    return () => {
+      if (thinkingInterval) clearInterval(thinkingInterval);
+    };
+  }, [load, faceMesh]);
+
   // Play animation clips when available
   useEffect(() => {
 
@@ -557,19 +1123,6 @@ function App() {
   const [visits, setVisits] = useState("--");
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [chatOpen, setChatOpen] = useState(false); // New state for chat widget
-
-  // Add RAG test function
-  const testRAG = () => {
-    const testQueries = [
-      "What are Michael's AI skills?",
-      "Tell me about Michael's projects",
-      "What certifications does Michael have?",
-      "How can I contact Michael?"
-    ];
-    
-    const randomQuery = testQueries[Math.floor(Math.random() * testQueries.length)];
-    getResposnse(randomQuery);
-  };
 
   // Add global error handlers
   useEffect(() => {
@@ -870,6 +1423,7 @@ function App() {
                   setPlaying={setPlaying}
                   isPlayingAudio={isPlayingAudio}
                   setIsPlayingAudio={setIsPlayingAudio}
+                  load={load}
                 />
               </Suspense>
             </Canvas>
