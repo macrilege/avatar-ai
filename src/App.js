@@ -536,12 +536,6 @@ function Avatar({ avatar_url, speak, setSpeak, text, playing, setPlaying, isPlay
   );
 }
 
-const STYLES = {
-  area: { position: 'absolute', bottom: '0', left: '0', zIndex: 500 },
-  speak: { padding: '5px', display: 'block', color: '#FFFFFF', background: '#222222', border: 'None' },
-  label: { color: '#777777', fontSize: '0.5em' },
-}
-
 function App() {
 
   const [chats, setChats] = useState([{ msg: 'Hi! I\'m Joi, Michael McCullough\'s AI assistant. I can tell you about Michael\'s skills, projects, certifications, and experience in AI engineering. What would you like to know?', who: 'bot', exct: '0' }])
@@ -550,7 +544,8 @@ function App() {
   const [load, setLoad] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [visits, setVisits] = useState("--");
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false); // Move to main component
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false); // New state for chat widget
 
   // Add RAG test function
   const testRAG = () => {
@@ -666,8 +661,13 @@ function App() {
     getWebsiteVisits();
   }, [])
   useEffect(() => {
-    document.querySelector('.chat-box').scrollTop = document.querySelector('.chat-box').scrollHeight;
-  }, [chats])
+    if (chatOpen) {
+      document.querySelector('.chat-box')?.scrollTo({
+        top: document.querySelector('.chat-box')?.scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, [chats, chatOpen])
 
   const [speak, setSpeak] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -783,157 +783,154 @@ function App() {
         pauseOnHover
         theme="dark"
       />
-      <div style={STYLES.area}>
-        <button style={STYLES.speak}>
-          {speak || load ? 'Running...' : 'Type message.'}
-        </button>
-      </div>
-      <div className='about' onClick={() => { setShowModal(!showModal) }}>
-        <img src='./images/icons/menu.png' alt='menu'></img>
-      </div>
-      <div className='modal' style={{ display: showModal ? 'flex' : 'none' }}>
-        <h1>Michael's AI Assistant</h1>
-        <p style={{ marginTop: '10px' }}>A RAG-powered AI assistant that knows about Michael McCullough's professional background, skills, and projects</p>
-        <p><strong>Ask me about:</strong></p>
-        <ul style={{ textAlign: 'left', marginTop: '5px' }}>
-          <li>Michael's AI/ML skills and experience</li>
-          <li>His projects and certifications</li>
-          <li>Technical expertise and background</li>
-          <li>Contact information</li>
-        </ul>
+
+      {/* Chat Widget */}
+      <div className="chat-widget">
+        {/* Chat Toggle Button */}
         <button 
-          style={{ padding: '8px 16px', margin: '10px', backgroundColor: '#35a4f3', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
-          onClick={testRAG}
+          className={`chat-toggle ${chatOpen ? 'active' : ''}`}
+          onClick={() => setChatOpen(!chatOpen)}
         >
-          Test RAG System
+          {chatOpen ? (
+            <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          ) : (
+            <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+          )}
         </button>
-        <a style={{ padding: '10px' }} className='repo' href='https://github.com/macrilege' target='_blank' rel="noreferrer">Michael's GitHub</a>
-        <p>Powered by Ollama + RAG knowledge base</p>
-        <p>Made with ❤️ for</p>
-        <a href='https://www.linkedin.com/in/mic-mcc/' target='_blank' rel="noreferrer" style={{ marginBlock: "5px" }}>Michael McCullough</a>
-        <p>Visitor's count 👀 : <span style={{color: '#35a4f3'}}>{visits}</span></p>
-      </div>
-      <div className='chat-div'>
-        <div className='chat-box'>
-          {chats.map((chat, index) => {
-            const uniqueKey = `${chat.who}-${index}-${chat.msg.substring(0, 20)}`;
-            if (chat.who === "me") {
-              return <div key={uniqueKey} className={chat.who}>
-                {chat.msg}
-              </div>
-            } else {
-              return <div key={uniqueKey} className={chat.who}>
-                {chat.msg}
-                <div className='time'>{"generated in " + chat.exct + "s"}</div>
-              </div>
-            }
-          })}
 
-          {(load === true || speak) && !playing ? <div style={{ padding: '5px', display: 'flex', alignItems: 'center' }}><lottie-player src="https://lottie.host/8891318b-7fd9-471d-a9f4-e1358fd65cd6/EQt3MHyLWk.json" style={{ width: "50px", height: "50px" }} loop autoplay speed="1.4" direction="1" mode="normal"></lottie-player></div> : <></>}
-          
-          {isListening && <div style={{ padding: '5px', display: 'flex', alignItems: 'center', color: '#ff4444' }}>
-            🎤 Listening... <span style={{ marginLeft: '10px', cursor: 'pointer', color: '#35a4f3' }} onClick={cancelListening}>Cancel</span>
-          </div>}
-        </div>
-        <div className='msg-box'>
-          <button 
-            className={`msgbtn ${isListening ? 'listening' : ''}`} 
-            id='mic' 
-            onMouseDown={isListening ? stopListening : startListening}
-            onTouchStart={isListening ? stopListening : startListening}
-            style={{
-              backgroundColor: isListening ? '#ff4444' : '',
-              transform: isListening ? 'scale(1.1)' : 'scale(1)',
-              transition: 'all 0.2s ease'
-            }}
-          >
-            <img src='./images/icons/mic.png' alt='mic' unselectable='on'></img>
-          </button>
-          <input 
-            type='text' 
-            value={msg} 
-            onChange={e => setMsg(e.target.value)} 
-            onKeyDown={(e) => { 
-              if (e.key === 'Enter') { 
-                if (isListening) {
-                  stopListening();
-                  // Don't call getResposnse here as stopListening will handle it
+        {/* Chat Window */}
+        <div className={`chat-window ${chatOpen ? 'open' : ''}`}>
+          {/* Chat Header */}
+          <div className="chat-header">
+            <h3>Joi - AI Assistant</h3>
+            <p>Ask me about Michael's expertise</p>
+            <button 
+              className="chat-close-btn"
+              onClick={() => setChatOpen(false)}
+            >
+              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Avatar Container */}
+          <div className="chat-avatar-container">
+            <Canvas 
+              className="chat-canvas"
+              dpr={2} 
+              onCreated={(ctx) => {
+                ctx.gl.physicallyCorrectLights = true;
+              }}
+            >
+              <OrthographicCamera
+                makeDefault
+                zoom={800}
+                position={[0, 1.5, 1]}
+              />
+
+              <Suspense fallback={null}>
+                <Environment background={false} files="/images/photo_studio_loft_hall_1k.hdr" />
+              </Suspense>
+
+              <Suspense fallback={null}>
+                <Avatar
+                  avatar_url="/model.glb"
+                  speak={speak}
+                  setSpeak={setSpeak}
+                  text={text}
+                  playing={playing}
+                  setPlaying={setPlaying}
+                  isPlayingAudio={isPlayingAudio}
+                  setIsPlayingAudio={setIsPlayingAudio}
+                />
+              </Suspense>
+            </Canvas>
+          </div>
+
+          {/* Chat Content */}
+          <div className="chat-content">
+            <div className='chat-box'>
+              {chats.map((chat, index) => {
+                const uniqueKey = `${chat.who}-${index}-${chat.msg.substring(0, 20)}`;
+                if (chat.who === "me") {
+                  return <div key={uniqueKey} className={chat.who}>
+                    {chat.msg}
+                  </div>
                 } else {
-                  getResposnse(msg);
-                } 
-              } 
-            }} 
-            placeholder={isListening ? 'Listening...' : 'Say Hello!'}
-            style={{
-              backgroundColor: isListening ? '#ffe6e6' : '',
-              color: isListening ? '#333' : ''
-            }}
-          ></input>
-          <button className='msgbtn' id='send' onClick={() => { 
-            if (isListening) {
-              stopListening();
-            } else {
-              getResposnse(msg);
-            }
-          }}>
-            <img src='./images/icons/send.png' alt='send'></img>
-          </button>
+                  return <div key={uniqueKey} className={chat.who}>
+                    {chat.msg}
+                    <div className='time'>{"generated in " + chat.exct + "s"}</div>
+                  </div>
+                }
+              })}
+
+              {(load === true || speak) && !playing ? (
+                <div className="loading-container">
+                  <div className="loading-dots">
+                    <div className="loading-dot"></div>
+                    <div className="loading-dot"></div>
+                    <div className="loading-dot"></div>
+                  </div>
+                  <span>Thinking...</span>
+                </div>
+              ) : <></>}
+              
+              {isListening && (
+                <div className="listening-indicator">
+                  🎤 Listening...
+                  <span className="listening-cancel" onClick={cancelListening}>Cancel</span>
+                </div>
+              )}
+            </div>
+
+            {/* Chat Input */}
+            <div className="chat-input">
+              <div className='msg-box'>
+                <button 
+                  className={`msgbtn ${isListening ? 'listening' : ''}`} 
+                  onMouseDown={isListening ? stopListening : startListening}
+                  onTouchStart={isListening ? stopListening : startListening}
+                >
+                  <img src='./images/icons/mic.png' alt='mic' />
+                </button>
+                <input 
+                  type='text' 
+                  value={msg} 
+                  onChange={e => setMsg(e.target.value)} 
+                  onKeyDown={(e) => { 
+                    if (e.key === 'Enter') { 
+                      if (isListening) {
+                        stopListening();
+                      } else {
+                        getResposnse(msg);
+                      } 
+                    } 
+                  }} 
+                  placeholder={isListening ? 'Listening...' : 'Ask me anything about Michael...'}
+                />
+                <button className='msgbtn' onClick={() => { 
+                  if (isListening) {
+                    stopListening();
+                  } else {
+                    getResposnse(msg);
+                  }
+                }}>
+                  <img src='./images/icons/send.png' alt='send' />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* <Stats /> */}
-      <Canvas dpr={2} onCreated={(ctx) => {
-        ctx.gl.physicallyCorrectLights = true;
-      }}>
-
-        <OrthographicCamera
-          makeDefault
-          zoom={1400}
-          position={[0, 1.65, 1]}
-        />
-
-        {/* <OrbitControls
-        target={[0, 1.65, 0]}
-      /> */}
-
-        <Suspense fallback={null}>
-          <Environment background={false} files="/images/photo_studio_loft_hall_1k.hdr" />
-        </Suspense>
-
-        <Suspense fallback={null}>
-          <Bg />
-        </Suspense>
-
-        <Suspense fallback={null}>
-          <Avatar
-            avatar_url="/model.glb"
-            speak={speak}
-            setSpeak={setSpeak}
-            text={text}
-            playing={playing}
-            setPlaying={setPlaying}
-            isPlayingAudio={isPlayingAudio}
-            setIsPlayingAudio={setIsPlayingAudio}
-          />
-        </Suspense>
-      </Canvas>
       <Loader dataInterpolation={(p) => `Loading... please wait`} />
     </div>
   )
-}
-
-function Bg() {
-
-  const texture = useTexture('/images/background.jpg');
-
-  return (
-    <mesh position={[0, 1.5, -4]} scale={[1.2, 1.2, 1.2]}>
-      <planeBufferGeometry />
-      <meshBasicMaterial map={texture} />
-
-    </mesh>
-  )
-
 }
 
 export default App;
